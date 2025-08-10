@@ -14,9 +14,22 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id    String @id @default(uuid())
+  email String @unique
+  role String @default("USER")
+  password String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tickets Ticket[]
+}
+
 model Event {
   id    String @id @default(uuid())
   name  String
+  description String
+  startTime DateTime
+  location String
   date  DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -28,7 +41,9 @@ model Ticket {
   token   String @unique
   eventId String
   event   Event @relation(fields: [eventId], references: [id])
+  userId String
+  user    User @relation(fields: [userId], references: [id])
   isValid Boolean @default(true)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @updatedAt 
 }

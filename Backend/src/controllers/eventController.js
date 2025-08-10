@@ -1,14 +1,17 @@
-import prisma from "../config/db.js";
+import prisma from "../../config/db.js";
 
 export const createEvent = async (req, res) => {
     try {
-        const { name, date } = req.body;
-        if(!name || !date) {
-            return res.status(400).json({ error: "Name and date are required" });
+        const { name, description, startTime, location, date } = req.body;
+        if(!name || !date || !description || !startTime || !location) {
+            return res.status(400).json({ error: "Name, description, start time, location, and date are required" });
         }
         const event = await prisma.event.create({
             data: {
                 name,
+                description,
+                startTime,
+                location,
                 date
             }
         })
@@ -21,7 +24,11 @@ export const createEvent = async (req, res) => {
 
 export const getEvents = async (req, res) => {
     try {
-        const events = await prisma.event.findMany();
+        const events = await prisma.event.findMany({
+           orderBy: {
+            date: "asc"
+           }
+        });
         return res.status(200).json({ events });
     } catch (error) {
         console.log(error);

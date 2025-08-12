@@ -1,135 +1,117 @@
 import prisma from "../../config/db.js";
 import QRCode from "qrcode";
+import cuid from "cuid"; // For generating unique codes
 
+// Create Ticket (Admin only)
+export async function createTicket(req, res) {
+  try {
+    const { eventId, assignedToId, metadata } = req.body;
+    const adminId = req.user.id;
 
-//generate a unique token for the ticket
-const generateToken = () => {
-    return Math.random.toString(36).substring(2)+Date.now().toString(36);
+    // Validate event exists
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+
+    // Generate a unique code for QR content 
+    const code = cuid();
+
+    // For simplicity, we embed only the code in the QR code
+    const qrCodeData = code;
+
+    // Generate QR code PNG data URL
+    const qrCodeUrl = await QRCode.toDataURL(qrCodeData);
+
+    // Create ticket in DB
+    const ticket = await prisma.ticket.create({
+      data: {
+        code,
+        eventId,
+        assignedToId: assignedToId || null,
+        createdById: adminId,
+        metadata: metadata || null,
+      },
+      include: {
+        event: true,
+        assignedTo: true,
+      },
+    });
+
+    res.json({ ticket, qrCodeUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error creating ticket' });
+  }
 }
 
-export const createTicketAndGenerateQrCode = async (req, res) => {
-    try {
-        const { eventId } = req.body;
-        if(!eventId) {
-            return res.status(400).json({ error: "Event ID is required" });
-        }
-        const token = generateToken();
+// Get Tickets for User or Admin
+export async function getTickets(req, res) {
+  try {
+    const user = req.user;
+    let tickets;
 
-       const ticket = await prisma.ticket.create({
-           data: {
-               token,
-               eventId,
-               isValid: true
-           }
-       })
-       // generate qr code as a data url
-       const qrCodeUrl = await QRCode.toDataURL(token);
-
-       return res.status(200).json({ ticket, qrCodeUrl });
-    } catch (error) {
-        console.log(error);
-        return res.status(500).json({ error: "Failed to generate ticket" });
+    if (user.role === 'ADMIN') {
+      // Admin sees all tickets created by them
+      tickets = await prisma.ticket.findMany({
+        where: { createdById: user.id },
+        include: { event: true, assignedTo: true },
+      });
+    } else {
+      // Ordinary user sees tickets assigned to them
+      tickets = await prisma.ticket.findMany({
+        where: { assignedToId: user.id },
+        include: { event: true, assignedTo: true },
+      });
     }
+
+    res.json(tickets);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching tickets' });
+  }
 }
 
-export const validateTicket = async(req, res) => {
-    try {
-        const { token } = req.body;
-        if(!token) {
-            return res.status(400).json({ error: "Token is required" });
-        }
-        // find ticket by token
-        const ticket = await prisma.ticket.findUnique({
-            where: {
-                token
-            }
-        })
-        if(!ticket) {
-            return res.status(404).json({ error: "Ticket not found" });
-        }
-        if(!ticket.isValid) {
-            return res.status(400).json({ error: "Ticket is already used" });
-        }
-        // update ticket to be invalid
-        await prisma.ticket.update({
-            where: {
-                token
-            },
-            data: {
-                isValid: false
-            }
-        })
-        return res.status(200).json({ message: "Ticket validated successfully", ticket });
-    } catch (error) {
-        console.log(error);
-        return res.status(500).json({ error: "Failed to validate ticket" });
+// Get Ticket by code (authenticated)
+export async function getTicketByCode(req, res) {
+  try {
+    const { code } = req.params;
+
+    const ticket = await prisma.ticket.findUnique({
+      where: { code },
+      include: { event: true, assignedTo: true },
+    });
+
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+    // Authorization: ordinary users can only see their own tickets
+    if (req.user.role !== 'ADMIN' && ticket.assignedToId !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
     }
+
+    res.json(ticket);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching ticket' });
+  }
 }
 
-export const approveTicket = async (req, res) => {
-    try {
-        const { userId, eventId, quantity = 1 } = req.body; // Defaults to 1 ticket if quantity not specified
-        if (!userId || !eventId) {
-          return res.status(400).json({ error: 'userId and eventId are required' });
-        }
-        if (!Number.isInteger(quantity) || quantity < 1) {
-          return res.status(400).json({ error: 'quantity must be a positive integer' });
-        }
-    
-        // Check if user and event exist
-        const user = await prisma.user.findUnique({ where: { id: userId } });
-        const event = await prisma.event.findUnique({ where: { id: parseInt(eventId) } });
-        if (!user) {
-          return res.status(404).json({ error: 'User not found' });
-        }
-        if (!event) {
-          return res.status(404).json({ error: 'Event not found' });
-        }
-    
-        // Create multiple tickets
-        const tickets = [];
-        for (let i = 0; i < quantity; i++) {
-          const token = generateToken();
-          const ticket = await prisma.ticket.create({
-            data: {
-              token,
-              eventId: parseInt(eventId),
-              userId,
-              isValid: true,
-            },
-          });
-          tickets.push(ticket);
-        }
-    
-        return res.status(200).json({ 
-          message: `Approved ${quantity} ticket(s) for user ${userId}`, 
-          tickets,
-        });
-      } catch (error) {
-        console.error(error);
-        return res.status(500).json({ error: 'Failed to approve ticket purchase' });
-      }
-}
+// Validate & Invalidate Ticket (Admin only)
+export async function validateTicket(req, res) {
+  try {
+    const { code } = req.params;
 
-export const getTicketByUserId = async (req, res) => {
-    try {
-        const userId = req.user.id; 
-    
-        // Fetch tickets for the logged-in user
-        const tickets = await prisma.ticket.findMany({
-          where: { userId },
-          include: { event: true }, 
-        });
-    
-        // Generate QR codes on demand for each ticket
-        const ticketsWithQr = await Promise.all(tickets.map(async (ticket) => {
-          const qrCodeUrl = await QRCode.toDataURL(ticket.token);
-          return { ...ticket, qrCodeUrl };
-        }));
-    
-        return res.status(200).json(ticketsWithQr);
-      } catch (error) {
-        console.error(error);
-        return res.status(500).json({ error: 'Failed to fetch tickets' });
-      }
+    const ticket = await prisma.ticket.findUnique({ where: { code } });
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+    if (!ticket.valid) return res.status(400).json({ error: 'Ticket already used' });
+
+    // Mark ticket as invalid and record scannedAt
+    const updated = await prisma.ticket.update({
+      where: { code },
+      data: { valid: false, scannedAt: new Date() },
+    });
+
+    res.json({ message: 'Ticket validated and invalidated', ticket: updated });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error validating ticket' });
+  }
 }

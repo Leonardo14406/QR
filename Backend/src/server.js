@@ -1,11 +1,14 @@
 import express from "express";
 import dotenv from "dotenv";
-import cors from "cors";
 import prisma from "../config/db.js";
+import cookieParser from "cookie-parser";
+import authRoutes from "./routes/authRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
+import braceletRoutes from "./routes/braceletRoute.js";
 import ticketRoutes from "./routes/ticketRoute.js";
-import eventRoutes from "./routes/eventRoute.js";
-import userRoutes from "./routes/userRoutes.js";
-import helmet from "helmet";
+import { securityMiddleware } from "./middleware/security.js";
+import { errorHandler } from "./middleware/errorHandler.js";
+import { apiLimiter } from "./middleware/rateLimiter.js";
 
 dotenv.config();
 
@@ -13,13 +16,22 @@ const app = express();
 
 prisma.$connect();
 
-app.use(cors());
-app.use(express.json());
-app.use(helmet());
+securityMiddleware(app);
+app.use('/api/', apiLimiter);
+// Body parsing middleware
+app.use(cookieParser());
 
-app.use("/api/users", userRoutes);
-app.use("/api/tickets", ticketRoutes);
-app.use("/api/events", eventRoutes);
+app.use(express.json());
+// Static file serving
+app.use('/bracelets', express.static('public/bracelets'));
+// Endpoint routes
+app.use('/auth', authRoutes);
+app.use('/admin', adminRoutes);
+app.use('/bracelets', braceletRoutes);
+app.use('/tickets', ticketRoutes);
+
+// Error handling middleware
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5555;
 

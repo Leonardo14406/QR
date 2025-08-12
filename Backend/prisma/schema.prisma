@@ -14,36 +14,90 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+}
+
 model User {
-  id    String @id @default(uuid())
-  email String @unique
-  role String @default("USER")
-  password String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tickets Ticket[]
+  id             String    @id @default(uuid())
+  email          String    @unique
+  password       String
+  name           String?
+  role           Role      @default(USER)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tokenVersion   Int       @default(0) // increment to invalidate existing tokens
+  // Tickets the user owns
+  tickets        Ticket[]  @relation("UserTickets")
+   // Tickets the user created (if admin)
+  ticketsCreated Ticket[]   @relation("TicketsCreated")
+  // Bracelets created by this admin
+  bracelets      Bracelet[] @relation("AdminBracelets")
+  // password reset
+  passwordResets PasswordResetToken[]
+  // refresh tokens
+  refreshTokens  RefreshToken[]
 }
 
 model Event {
-  id    String @id @default(uuid())
-  name  String
-  description String
-  startTime DateTime
-  location String
-  date  DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tickets Ticket[]
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  location    String?
+  date        DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tickets     Ticket[]
 }
 
 model Ticket {
-  id      String @id @default(uuid())
-  token   String @unique
-  eventId String
-  event   Event @relation(fields: [eventId], references: [id])
-  userId String
-  user    User @relation(fields: [userId], references: [id])
-  isValid Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt 
+  id            String   @id @default(uuid())
+  code          String   @unique // alphanumeric representing the QR content id
+  event         Event    @relation(fields: [eventId], references: [id])
+  eventId       String
+  assignedTo    User?    @relation("UserTickets", fields: [assignedToId], references: [id])
+  assignedToId  String?
+  createdBy     User?    @relation("TicketsCreated", fields: [createdById], references: [id])
+  createdById   String?
+  valid         Boolean  @default(true)
+  metadata      Json?    // stores any extra event/user metadata for validation/print
+  scannedAT     DateTime? // when the ticket was scanned
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Bracelet {
+  id            String   @id @default(uuid())
+  slug          String   @unique // path used to serve the static page e.g. /bracelets/<slug>.html
+  title         String
+  description   String?
+  imagePath     String?  // stored in Supabase or public path
+  designJson    Json?    // optional design override (font, colors, etc.)
+  createdBy     User     @relation("AdminBracelets", fields: [createdById], references: [id])
+  createdById   String
+  publicUrl     String?  // fully qualified URL to the generated static page
+  isActive      Boolean  @default(true) // if false, the bracelet is not available for new scans
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model PasswordResetToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  expiresAt  DateTime
+  used       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  revoked    Boolean  @default(false)
 }

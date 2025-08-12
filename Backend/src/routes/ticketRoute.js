@@ -1,11 +1,17 @@
-import express from "express";
-import { approveTicket, createTicketAndGenerateQrCode, validateTicket, getTicketByUserId } from "../controllers/ticketController.js";
-import { authMiddleware, adminMiddleware } from "../middleware/authMiddleware.js";
+import express from 'express';
+import {
+  createTicket,
+  getTickets,
+  getTicketByCode,
+  validateTicket,
+} from '../controllers/ticketController.js';
+import { requireAdmin, requireAuth } from '../middleware/auth.js';
+
 const router = express.Router();
 
-router.post("/generate", authMiddleware, adminMiddleware, createTicketAndGenerateQrCode);
-router.post("/validate", authMiddleware, adminMiddleware, validateTicket);
-router.post("/approve", authMiddleware, adminMiddleware, approveTicket);
-router.get("/", authMiddleware, getTicketByUserId);
+router.post('/', requireAuth, requireAdmin, createTicket);
+router.get('/', requireAuth, getTickets);
+router.get('/:code', requireAuth, getTicketByCode);
+router.post('/validate/:code', requireAuth, requireAdmin, validateTicket);
 
 export default router;

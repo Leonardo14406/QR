@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import prisma from '../../config/db.js'; // Adjust the import path as necessary
-import { signToken } from '../utils/jwt.js';
+import { signToken, signRefreshToken, verifyRefreshToken, verifyToken } from '../utils/jwt.js';
 import nodemailer from 'nodemailer';
 
 const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS);
@@ -34,40 +34,67 @@ export async function signup(req, res) {
 
 export async function login(req, res) {
   const { email, password } = req.body;
-  if (!email || !password)
+  if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
+  }
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+  console.log('Login attempt for email:', email);
+  
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      console.log('User not found for email:', email);
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
 
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) return res.status(400).json({ error: 'Invalid credentials' });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      console.log('Password mismatch for user:', user.id);
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
 
-  const accessToken = signToken(user);
-  const refreshToken = signRefreshToken(user);
+    console.log('Generating tokens for user:', user.id);
+    
+    // Generate tokens
+    const accessToken = signToken(user);
+    console.log('Access token generated successfully');
+    
+    const refreshToken = signRefreshToken(user);
+    console.log('Refresh token generated successfully');
 
-  // Store refresh token in DB
-  await prisma.refreshToken.create({
-    data: {
-      token: refreshToken,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days expiry
-    },
-  });
+    // Store refresh token in DB
+    await prisma.refreshToken.create({
+      data: {
+        token: refreshToken,
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days expiry
+      },
+    });
 
-  res.cookie('token', accessToken, {
-    ...cookieOptions,
-    maxAge: 15 * 60 * 1000, // 15 minutes
-  });
+    // Set cookies
+    res.cookie('token', accessToken, {
+      ...cookieOptions,
+      maxAge: 15 * 60 * 1000, // 15 minutes
+    });
 
-  res.cookie('refreshToken', refreshToken, {
-    ...cookieOptions,
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  });
+    res.cookie('refreshToken', refreshToken, {
+      ...cookieOptions,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
 
-  res.json({
-    user: { id: user.id, email: user.email, role: user.role, name: user.name },
-  });
+    // Return user data (without sensitive information)
+    return res.json({
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        role: user.role, 
+        name: user.name 
+      },
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    return res.status(500).json({ error: 'Internal server error during login' });
+  }
 }
 
 export async function refreshTokenHandler(req, res) {

@@ -1,10 +1,10 @@
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m'; // Default fallback
 
-const REFRESH_SECRET = process.env.REFRESH_SECRET; // use env var!
-const REFRESH_EXPIRES_IN = process.env.REFRESH_EXPIRES_IN;
+const REFRESH_SECRET = process.env.REFRESH_SECRET || 'default_refresh_secret';
+const REFRESH_EXPIRES_IN = process.env.REFRESH_EXPIRES_IN || '7d'; // Default fallback
 
 // Signs access token (your existing function)
 export function signToken(user) {

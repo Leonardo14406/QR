@@ -103,10 +103,10 @@ export async function validateTicket(req, res) {
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
     if (!ticket.valid) return res.status(400).json({ error: 'Ticket already used' });
 
-    // Mark ticket as invalid and record scannedAt
+    // Mark ticket as invalid and record scannedAT
     const updated = await prisma.ticket.update({
       where: { code },
-      data: { valid: false, scannedAt: new Date() },
+      data: { valid: false, scannedAT: new Date() },
     });
 
     res.json({ message: 'Ticket validated and invalidated', ticket: updated });

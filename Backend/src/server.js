@@ -9,6 +9,7 @@ import ticketRoutes from "./routes/ticketRoute.js";
 import { securityMiddleware } from "./middleware/security.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { apiLimiter } from "./middleware/rateLimiter.js";
+import eventRoutes from "./routes/eventRoutes.js";
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/bracelets', braceletRoutes);
 app.use('/tickets', ticketRoutes);
+app.use('/events', eventRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

@@ -2,7 +2,7 @@ import { verifyToken } from '../utils/jwt.js';
 import prisma from '../../config/db.js'; 
 
 export async function requireAuth(req, res, next) {
-  const token = req.cookies.token;
+  const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'Missing token' });
 
   try {

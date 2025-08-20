@@ -40,7 +40,7 @@ function setRefreshCookie(res, value) {
   res.cookie(REFRESH_COOKIE_NAME, value, {
     httpOnly: true,
     secure: NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "none",
     path: "/",
     maxAge: REFRESH_TOKEN_TTL_SEC * 1000
   });
@@ -50,7 +50,7 @@ function setAccessCookie(res, token) {
   res.cookie(ACCESS_TOKEN_COOKIE_NAME, token, {
     httpOnly: false, // Allow access from client-side JavaScript for SSR
     secure: NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "none",
     path: "/",
     maxAge: 15 * 60 * 1000 // 15 minutes
   });

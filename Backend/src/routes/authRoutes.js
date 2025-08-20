@@ -1,22 +1,17 @@
-import express from 'express';
-import {
-  signup,
-  login,
-  logout,
-  requestPasswordReset,
-  resetPassword,
-  refreshTokenHandler
-} from '../controllers/authController.js';
-import { requireAuth } from '../middleware/auth.js';
-
+import express from "express";
+import AuthController from "../controllers/authController.js";
+import { authenticateJWT } from "../middleware/authMiddleware.js";
 const router = express.Router();
 
-router.post('/signup', signup);
-router.post('/login', login);
-router.post('/logout', requireAuth, logout);
-router.post('/refresh-token', refreshTokenHandler);
+// Authentication routes
+router.post("/login", AuthController.login);
+router.post("/signup", AuthController.signup);
+router.post("/logout", AuthController.logout);
+router.post("/refresh-token", AuthController.refresh);
+router.get("/me", authenticateJWT, AuthController.me);
+
 // Password reset routes
-router.post('/request-password-reset', requestPasswordReset);
-router.post('/reset-password', resetPassword);
+router.post("/forgot-password", AuthController.forgotPassword);
+router.post("/reset-password", AuthController.resetPassword);
 
 export default router;

@@ -1,103 +1,146 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// prisma/schema.prisma
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
-enum Role {
-  USER
-  ADMIN
+/// Role enum used to seed roles / keep consistent names
+enum RoleName {
+  GENERATOR
+  RECEIVER
 }
 
 model User {
-  id             String    @id @default(uuid())
-  email          String    @unique
-  password       String
-  name           String?
-  role           Role      @default(USER)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  tokenVersion   Int       @default(0) // increment to invalidate existing tokens
-  // Tickets the user owns
-  tickets        Ticket[]  @relation("UserTickets")
-   // Tickets the user created (if admin)
-  ticketsCreated Ticket[]   @relation("TicketsCreated")
-  // Bracelets created by this admin
-  bracelets      Bracelet[] @relation("AdminBracelets")
+  id              String          @id @default(uuid())
+  email           String          @unique
+  emailVerified   Boolean         @default(false)
+  emailVerifiedAt DateTime?
+  passwordHash    String?
+  firstName       String?
+  lastName        String?
+  avatarUrl       String?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
   // password reset
-  passwordResets PasswordResetToken[]
-  // refresh tokens
-  refreshTokens  RefreshToken[]
+  resetToken      String?
+  resetTokenExp   DateTime?
+
+  roles           UserRole[]      
+  refreshTokens   RefreshToken[]
+
+  // NEW: relation to generated qr codes
+  qrCodes         qrCode[]
+
+  // NEW: per-user settings
+  settings        userSettings?
 }
 
-model Event {
-  id          String   @id @default(uuid())
-  name       String
-  description String?
-  location    String?
-  date        DateTime
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  tickets     Ticket[]
+model Role {
+  id    Int       @id @default(autoincrement())
+  name  RoleName  @unique
+  users UserRole[]
 }
 
-model Ticket {
-  id            String   @id @default(uuid())
-  code          String   @unique // alphanumeric representing the QR content id
-  event         Event    @relation(fields: [eventId], references: [id])
-  eventId       String
-  assignedTo    User?    @relation("UserTickets", fields: [assignedToId], references: [id])
-  assignedToId  String?
-  createdBy     User?    @relation("TicketsCreated", fields: [createdById], references: [id])
-  createdById   String?
-  valid         Boolean  @default(true)
-  metadata      Json?    // stores any extra event/user metadata for validation/print
-  scannedAT     DateTime? // when the ticket was scanned
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model Bracelet {
-  id            String   @id @default(uuid())
-  slug          String   @unique // path used to serve the static page e.g. /bracelets/<slug>.html
-  title         String
-  description   String?
-  imagePath     String?  // stored in Supabase or public path
-  designJson    Json?    // optional design override (font, colors, etc.)
-  createdBy     User     @relation("AdminBracelets", fields: [createdById], references: [id])
-  createdById   String
-  publicUrl     String?  // fully qualified URL to the generated static page
-  isActive      Boolean  @default(true) // if false, the bracelet is not available for new scans
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model PasswordResetToken {
-  id         String   @id @default(uuid())
-  token      String   @unique
+model UserRole {
+  id         Int      @id @default(autoincrement())
   user       User     @relation(fields: [userId], references: [id])
   userId     String
-  expiresAt  DateTime
-  used       Boolean  @default(false)
-  createdAt  DateTime @default(now())
+  role       Role     @relation(fields: [roleId], references: [id])
+  roleId     Int
+  assignedAt DateTime @default(now())
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
 }
 
 model RefreshToken {
-  id         String   @id @default(uuid())
-  token      String   @unique
-  user       User     @relation(fields: [userId], references: [id])
-  userId     String
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-  revoked    Boolean  @default(false)
+  id          String   @id @default(uuid())
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  tokenHash   String   // SHA-256 hex of the refresh token value
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+  revoked     Boolean  @default(false)
+  replacedBy  String?  // id of token that replaced this (for rotation)
+  ip          String?
+  userAgent   String?
+
+  @@index([userId])
+  @@index([tokenHash])
 }
+
+// NEW: General-purpose qr codes
+model qrCode {
+  id           String    @id @default(uuid())
+  code         String    @unique            // Opaque token used in the qr image
+  payload      Json?                           // Arbitrary data (ticket ID, text, etc.)
+  type         String    @default("generic")  // e.g., "ticket"
+  oneTime      Boolean   @default(true)       // If true, becomes invalid after first successful validation
+  isValid      Boolean   @default(true)       // Current validity flag
+  createdAt    DateTime  @default(now())
+  validatedAt  DateTime?
+  expiresAt    DateTime?
+  pageId       String?   // Optional page ID for linking to a specific page in the app
+
+  // Who generated it
+  createdBy    String
+  creator      User      @relation(fields: [createdBy], references: [id])
+  qrScans     qrScan[]   // Relation to scans
+  @@index([code])
+  @@index([createdBy])
+}
+
+model qrPage {
+  id          String         @id @default(uuid())
+  title       String?
+  description String?
+  style       Json?          // Store style as JSON object
+  blocks      ContentBlock[] // Relation to content blocks
+  createdAt   DateTime       @default(now())
+}
+
+model ContentBlock {
+  id      String   @id @default(uuid())
+  type    String
+  content String
+  style   Json?
+  order   Int
+  page    qrPage   @relation(fields: [pageId], references: [id])
+  pageId  String
+}
+
+model qrScan {
+  id        String   @id @default(uuid())
+  userId    String
+  qrCodeId  String
+  scannedAt DateTime @default(now())
+  qrCode    qrCode   @relation(fields: [qrCodeId], references: [id])
+}
+
+
+// NEW: Per-user settings
+model userSettings {
+  id                    String   @id @default(uuid())
+  user                  User     @relation(fields: [userId], references: [id])
+  userId                String   @unique
+  dailyGenericQrLimit   Int      @default(50)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([userId])
+}
+
+
+
+
+
+

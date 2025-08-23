@@ -12,7 +12,6 @@ if (!JWT_SECRET) {
 
 const ACCESS_TOKEN_EXPIRES_IN = "15m";
 const REFRESH_TOKEN_TTL_SEC = 60 * 60 * 24 * 7; // 7 days
-const ACCESS_TOKEN_COOKIE_NAME = 'accessToken';
 const REFRESH_COOKIE_NAME = 'refreshToken';
 const ALLOWED_SIGNUP_ROLES = ["GENERATOR", "RECEIVER"]; // No ADMIN
 
@@ -37,27 +36,20 @@ const transporter = nodemailer.createTransport({
 });
 
 function setRefreshCookie(res, value) {
+  const isProduction = NODE_ENV === "production";
+  
   res.cookie(REFRESH_COOKIE_NAME, value, {
     httpOnly: true,
-    secure: NODE_ENV === "production",
-    sameSite: "none",
+    secure: isProduction,  // true in production, false in development
+    sameSite: isProduction ? 'none' : 'lax',  // 'none' in production, 'lax' in development
     path: "/",
-    maxAge: REFRESH_TOKEN_TTL_SEC * 1000
+    maxAge: REFRESH_TOKEN_TTL_SEC * 1000,
+    domain: isProduction ? 'qr-ui-kappa.vercel.app' : 'localhost'  // Set your production domain
   });
 }
-
-function setAccessCookie(res, token) {
-  res.cookie(ACCESS_TOKEN_COOKIE_NAME, token, {
-    httpOnly: false, // Allow access from client-side JavaScript for SSR
-    secure: NODE_ENV === "production",
-    sameSite: "none",
-    path: "/",
-    maxAge: 15 * 60 * 1000 // 15 minutes
-  });
-}
+// access token is returned in JSON; frontend stores in memory
 
 function clearAuthCookies(res) {
-  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, { path: '/' });
   res.clearCookie(REFRESH_COOKIE_NAME, { path: '/' });
 }
 
@@ -119,14 +111,13 @@ const AuthController = {
       roles: roleNames
     });
 
-    // Set both access and refresh tokens as cookies
+    // Set refresh token as cookie; return access token in response body
     const { raw: refreshValue } = await issueRefreshToken({
       userId: user.id,
       ip: req.ip,
       userAgent: req.headers["user-agent"] || ""
     });
     setRefreshCookie(res, refreshValue);
-    setAccessCookie(res, accessToken);
 
     return res.status(201).json({
       accessToken,
@@ -168,7 +159,7 @@ const AuthController = {
     });
     setRefreshCookie(res, refreshValue);
 
-    return res.json({ accessToken });
+    return res.json({ accessToken, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, intendedUse: roleNames } });
   },
 
   refresh: async (req, res) => {
@@ -215,8 +206,7 @@ const AuthController = {
       roles: roleNames
     });
     
-    setAccessCookie(res, accessToken);
-    return res.json({ accessToken });
+    return res.json({ accessToken, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, intendedUse: roleNames } });
   },
 
   logout: async (req, res) => {

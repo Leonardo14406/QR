@@ -11,6 +11,40 @@ function generateOpaqueCode(bytes = 24) {
   return crypto.randomBytes(bytes).toString("hex");
 }
 
+// Minimal CSS sanitizer for inline style attributes.
+// Accepts string or object, returns a safe inline CSS string with whitelisted properties only.
+function sanitizeStyle(style) {
+  const ALLOWED = new Set([
+    'color', 'background-color', 'font-size', 'font-weight', 'font-style', 'text-align',
+    'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+    'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'width', 'height', 'max-width', 'max-height', 'min-width', 'min-height',
+    'border', 'border-color', 'border-width', 'border-style', 'border-radius',
+    'display'
+  ]);
+  // If style is an object, convert to k:v string first
+  let entries = [];
+  if (!style) return '';
+  if (typeof style === 'object') {
+    entries = Object.entries(style).map(([k, v]) => [String(k).toLowerCase(), String(v || '')]);
+  } else if (typeof style === 'string') {
+    entries = style.split(';').map(part => part.trim()).filter(Boolean).map(rule => {
+      const idx = rule.indexOf(':');
+      if (idx === -1) return [null, null];
+      const k = rule.slice(0, idx).trim().toLowerCase();
+      const v = rule.slice(idx + 1).trim();
+      return [k, v];
+    }).filter(([k]) => !!k);
+  } else {
+    return '';
+  }
+  const safe = entries
+    .filter(([k, v]) => ALLOWED.has(k) && !/expression\s*\(|javascript:/i.test(v))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('; ');
+  return safe;
+}
+
 async function createUniqueCode() {
   // Try a few times to avoid rare collisions
   for (let i = 0; i < 5; i++) {
@@ -40,6 +74,11 @@ const qrController = {
         return res.status(400).json({ qr: null, message: "payload is required" });
       }
 
+      // Optional: object payloads must include 'content'
+      if (payload && typeof payload === 'object' && !Array.isArray(payload) && !payload.content) {
+        return res.status(400).json({ qr: null, message: "Object payload must include 'content'" });
+      }
+
       const code = await createUniqueCode();
 
       const record = await prisma.qrCode.create({
@@ -61,14 +100,19 @@ const qrController = {
           createdAt: true,
           expiresAt: true,
           creator: {
-            select: { firstName: true, lastName: true },
+            select: { id: true, firstName: true, lastName: true, email: true },
           },
         },
       });
 
       // Ensure response send doesn't fail silently (e.g., serialization issues)
       try {
-        return res.status(201).json({ qr: record });
+        const qr = {
+          ...record,
+          createdAt: record.createdAt?.toISOString?.() || null,
+          expiresAt: record.expiresAt?.toISOString?.() || null,
+        };
+        return res.status(201).json({ qr });
       } catch (responseErr) {
         console.error("qr generate response error:", responseErr);
         return res.status(500).json({ qr: null, message: "Failed to send response" });
@@ -103,6 +147,9 @@ const qrController = {
           data: {
             type: block.type,
             content: block.type === 'image' ? block.url : block.text,
+            alt: block.type === 'image' ? (block.alt || null) : null,
+            width: block.type === 'image' ? (block.width || null) : null,
+            height: block.type === 'image' ? (block.height || null) : null,
             style: block.style || {},
             order: index,
             pageId: page.id,
@@ -124,9 +171,16 @@ const qrController = {
       select: {
         id: true,
         code: true,
+        payload: true,
         type: true,
+        oneTime: true,
+        isValid: true,
         createdAt: true,
+        expiresAt: true,
         pageId: true,
+        creator: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
@@ -134,10 +188,15 @@ const qrController = {
     const rawBase = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
     const baseUrl = rawBase.replace(/\/+$/, "");
     const url = `${baseUrl}/qr/page/${page.id}`;
+    console.log('[qr/generate-page] Generated URL:', url);
 
     try {
       return res.status(201).json({ 
-        qr,
+        qr: {
+          ...qr,
+          createdAt: qr.createdAt?.toISOString?.() || null,
+          expiresAt: qr.expiresAt?.toISOString?.() || null,
+        },
         url
       });
     } catch (responseErr) {
@@ -176,7 +235,10 @@ async renderPage(req, res) {
         blocks: page.blocks.map(block => ({
           type: block.type,
           content: block.content,
-          style: block.style
+          style: block.style,
+          alt: block.alt || null,
+          width: block.width || null,
+          height: block.height || null,
         }))
       });
     }
@@ -208,11 +270,11 @@ async renderPage(req, res) {
         ${page.blocks.map(block => {
           switch(block.type) {
             case 'heading':
-              return `<h2 style="${block.style || ''}">${block.content}</h2>`;
+              return `<h2 style="${sanitizeStyle(block.style)}">${block.content}</h2>`;
             case 'paragraph':
-              return `<p style="${block.style || ''}">${block.content}</p>`;
+              return `<p style="${sanitizeStyle(block.style)}">${block.content}</p>`;
             case 'image':
-              return `<img src="${block.content}" alt="${block.alt || ''}" style="${block.style || ''}" />`;
+              return `<img src="${block.content}" alt="${block.alt || ''}" ${block.width ? `width="${block.width}"` : ''} ${block.height ? `height="${block.height}"` : ''} style="${sanitizeStyle(block.style)}" />`;
             default:
               return '';
           }
@@ -255,7 +317,7 @@ async validate(req, res) {
         expiresAt: true,
         createdBy: true, // Include to check generator
         creator: {
-          select: { firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
     });
@@ -310,7 +372,7 @@ async validate(req, res) {
           validatedAt: true,
           expiresAt: true,
           creator: {
-            select: { firstName: true, lastName: true },
+            select: { id: true, firstName: true, lastName: true, email: true },
           },
         },
       });
@@ -330,8 +392,14 @@ async validate(req, res) {
       creator: updated.creator ? `${updated.creator.firstName} ${updated.creator.lastName}`.trim() : 'Unknown',
     };
 
+    const qr = {
+      ...updated,
+      createdAt: updated.createdAt?.toISOString?.() || null,
+      validatedAt: updated.validatedAt ? updated.validatedAt.toISOString() : null,
+      expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
+    };
     return res.status(200).json({
-      qr: updated,
+      qr,
       message: 'QR code validated successfully',
       humanReadable,
     });
@@ -424,7 +492,7 @@ async scanImage(req, res) {
         expiresAt: true,
         createdBy: true,
         creator: {
-          select: { firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
     });
@@ -505,8 +573,14 @@ async scanImage(req, res) {
     };
 
     console.log('[qr/scan-image] Validation successful:', humanReadable);
+    const qr = {
+      ...updated,
+      createdAt: updated.createdAt?.toISOString?.() || null,
+      validatedAt: updated.validatedAt ? updated.validatedAt.toISOString() : null,
+      expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
+    };
     return res.status(200).json({
-      qr: updated,
+      qr,
       message: 'QR code scanned successfully',
       humanReadable,
     });
@@ -517,16 +591,15 @@ async scanImage(req, res) {
 },
 
     /**
-     * GET /qr/history  (GENERATOR only)
-     * Returns all qr codes created by the user.
-     * Includes both "generic" and "page" types.
-     */
-    async history(req, res) {
+ * GET /qr/history (GENERATOR only)
+ * Returns all QR codes created by the user.
+ */
+async history(req, res) {
   try {
-    // Generated QR codes
+    console.log('[qr/history] User ID:', req.userId); // Debug log
     const generated = await prisma.qrCode.findMany({
       where: { createdBy: req.userId },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       select: {
         id: true,
         type: true,
@@ -538,70 +611,76 @@ async scanImage(req, res) {
         pageId: true,
         payload: true,
         creator: {
-          select: { firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
     });
 
-    // Scanned QR codes
-      const scanned = await prisma.qrScan.findMany({
-        where: { userId: req.userId },
-        orderBy: { scannedAt: "desc" },
-        select: {
-          scannedAt: true,
-          qrCode: {
-            select: {
-              id: true,
-              type: true,
-              oneTime: true,
-              isValid: true,
-              createdAt: true,
-              validatedAt: true,
-              expiresAt: true,
-              pageId: true,
-              payload: true,
-              creator: {
-                select: { firstName: true, lastName: true },
-              },
+    const scanned = await prisma.qrScan.findMany({
+      where: { userId: req.userId },
+      orderBy: { scannedAt: 'desc' },
+      select: {
+        scannedAt: true,
+        qrCode: {
+          select: {
+            id: true,
+            type: true,
+            oneTime: true,
+            isValid: true,
+            createdAt: true,
+            validatedAt: true,
+            expiresAt: true,
+            pageId: true,
+            payload: true,
+            creator: {
+              select: { id: true, firstName: true, lastName: true, email: true },
             },
           },
         },
-      });
+      },
+    });
 
-      // Format scanned codes to match generated codes
-      const scannedHistory = scanned.map(scan => ({
-        ...scan.qrCode,
-        scannedAt: scan.scannedAt,
-        scanned: true,
-      }));
+    const scannedHistory = scanned.map(scan => ({
+      ...scan.qrCode,
+      createdAt: scan.qrCode.createdAt?.toISOString?.() || null,
+      validatedAt: scan.qrCode.validatedAt ? scan.qrCode.validatedAt.toISOString() : null,
+      expiresAt: scan.qrCode.expiresAt ? scan.qrCode.expiresAt.toISOString() : null,
+      scannedAt: scan.scannedAt?.toISOString?.() || null,
+      scanned: true,
+    }));
 
-      // Mark generated codes and add scannedAt: null
-      const generatedHistory = generated.map(item => ({
-        ...item,
-        scanned: false,
-        scannedAt: null,
-      }));
+    const generatedHistory = generated.map(item => ({
+      ...item,
+      createdAt: item.createdAt?.toISOString?.() || null,
+      validatedAt: item.validatedAt ? item.validatedAt.toISOString() : null,
+      expiresAt: item.expiresAt ? item.expiresAt.toISOString() : null,
+      scanned: false,
+      scannedAt: null,
+    }));
 
-      // Combine and sort by date (createdAt or scannedAt)
-      const items = [...generatedHistory, ...scannedHistory].sort((a, b) => {
-        const dateA = a.scannedAt ?? a.createdAt;
-        const dateB = b.scannedAt ?? b.createdAt;
-        return dateB - dateA;
-      });
+    const items = [...generatedHistory, ...scannedHistory].sort((a, b) => {
+      const dateA = a.scannedAt ?? a.createdAt;
+      const dateB = b.scannedAt ?? b.createdAt;
+      const tA = typeof dateA === 'string' ? Date.parse(dateA) : (dateA?.getTime?.() || 0);
+      const tB = typeof dateB === 'string' ? Date.parse(dateB) : (dateB?.getTime?.() || 0);
+      return tB - tA; // Compare as timestamps
+    });
 
-      return res.json({ items });
-    } catch (err) {
-      console.error("qr history error:", err);
-      return res.status(500).json({ message: "Server error" });
-    }
-  },
-  /**
-   * GET /qr/:id  (GENERATOR only)
-   * Returns details of a specific qr code by ID.
-   */
-  async getQrDetailsById(req, res) {
-    try {
-      const qrCode = await prisma.qrCode.findUnique({
+    return res.json({ items });
+  } catch (err) {
+    console.error('qr history error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+},
+
+/**
+ * GET /qr/history/:id (GENERATOR only)
+ * Returns details of a specific QR code by ID.
+ */
+async getQrDetailsById(req, res) {
+  try {
+    console.log('[qr/:id] User ID:', req.userId, 'QR ID:', req.params.id); // Debug log
+    const qrCode = await prisma.qrCode.findUnique({
       where: { id: req.params.id },
       select: {
         id: true,
@@ -624,7 +703,6 @@ async scanImage(req, res) {
       return res.status(404).json({ message: 'QR code not found' });
     }
 
-    // Check if the user is the creator or has scanned the QR code
     const scan = await prisma.qrScan.findFirst({
       where: { qrCodeId: req.params.id, userId: req.userId },
     });
@@ -633,13 +711,14 @@ async scanImage(req, res) {
       return res.status(403).json({ message: 'Forbidden' });
     }
 
-    // Construct response to match QRCodeResponse
     const response = {
       ...qrCode,
       scannedAt: scan ? scan.scannedAt.toISOString() : null,
       scanned: !!scan,
-      url: typeof qrCode.payload === 'string' ? qrCode.payload : qrCode.payload?.content,
-      title: qrCode.payload?.title || (qrCode.type === 'page' ? 'Page QR Code' : 'URL QR Code'),
+      ...(qrCode.type === 'page' && {
+        url: typeof qrCode.payload === 'string' ? qrCode.payload : qrCode.payload?.content
+      }),
+      title: qrCode.payload?.title || (qrCode.type === 'page' ? 'Page QR Code' : 'QR Code'),
       isValid: qrCode.isValid ?? true,
       createdAt: qrCode.createdAt.toISOString(),
       expiresAt: qrCode.expiresAt ? qrCode.expiresAt.toISOString() : undefined,
@@ -649,61 +728,58 @@ async scanImage(req, res) {
 
     return res.json(response);
   } catch (err) {
-      console.error('QR code fetch error:', err);
-      return res.status(500).json({ message: "Server error" });
-    }
-  },
-  /**
+    console.error('QR code fetch error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+},
+
+/**
  * DELETE /qr/history/:id
  * Removes a QR code history entry.
- * - If it's a scanned QR: deletes the qrScan record.
- * - If it's a generated QR: deletes the qrCode (and associated data).
  */
-  async deleteHistory(req, res) {
-    try {
-      const { id } = req.params;
+async deleteHistory(req, res) {
+  try {
+    console.log('[qr/history/:id] User ID:', req.userId, 'QR ID:', req.params.id); // Debug log
+    const { id } = req.params;
 
-      // First check if the user scanned this QR
-      const scan = await prisma.qrScan.findFirst({
-        where: { qrCodeId: id, userId: req.userId },
+    const scan = await prisma.qrScan.findFirst({
+      where: { qrCodeId: id, userId: req.userId },
+    });
+
+    if (scan) {
+      await prisma.qrScan.delete({
+        where: { id: scan.id },
       });
-
-      if (scan) {
-        await prisma.qrScan.delete({
-          where: { id: scan.id },
-        });
-        return res.json({ message: "Scanned history entry deleted successfully" });
-      }
-
-      // Otherwise, check if the user generated this QR
-      const qrCode = await prisma.qrCode.findFirst({
-        where: { id, createdBy: req.userId },
-      });
-
-      if (qrCode) {
-        // If it's a page QR, also delete the page + content blocks
-        if (qrCode.pageId) {
-          await prisma.contentBlock.deleteMany({
-            where: { pageId: qrCode.pageId },
-          });
-          await prisma.qrPage.delete({
-            where: { id: qrCode.pageId },
-          });
-        }
-
-        await prisma.qrCode.delete({
-          where: { id },
-        });
-
-        return res.json({ message: "Generated QR code deleted successfully" });
-      }
-
-      return res.status(404).json({ message: "History entry not found" });
-    } catch (err) {
-      console.error("qr deleteHistory error:", err);
-      return res.status(500).json({ message: "Server error" });
+      return res.json({ message: 'Scanned history entry deleted successfully' });
     }
+
+    const qrCode = await prisma.qrCode.findFirst({
+      where: { id, createdBy: req.userId },
+    });
+
+    if (qrCode) {
+      if (qrCode.pageId) {
+        await prisma.contentBlock.deleteMany({
+          where: { pageId: qrCode.pageId },
+        });
+        await prisma.qrPage.delete({
+          where: { id: qrCode.pageId },
+        });
+      }
+
+      await prisma.qrCode.delete({
+        where: { id },
+      });
+
+      return res.json({ message: 'Generated QR code deleted successfully' });
+    }
+
+    return res.status(404).json({ message: 'History entry not found' });
+  } catch (err) {
+    console.error('qr deleteHistory error:', err);
+    return res.status(500).json({ message: 'Server error' });
   }
+},
 };
 
 export default qrController;

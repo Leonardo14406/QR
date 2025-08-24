@@ -19,6 +19,6 @@ export function securityMiddleware(app) {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token"], 
   }));
 }

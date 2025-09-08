@@ -38,7 +38,7 @@ app.use(express.json());
 // Routes
 app.use("/auth", authRoutes);
 app.use("/qr", qrRoutes);
-app.use("/settings", settingsRoutes);
+//app.use("/settings", settingsRoutes);
 
 // Errors
 app.use(errorHandler);

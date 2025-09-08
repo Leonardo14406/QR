@@ -296,118 +296,154 @@ async renderPage(req, res) {
  * Body: { code: string }
  * Validates generic QR codes for the generator only, returns details, and invalidates one-time codes
  */
-async validate(req, res) {
-  try {
-    const { code } = req.body;
-    if (!code || typeof code !== 'string') {
-      return res.status(400).json({ qr: null, message: 'code (string) is required' });
-    }
-
-    const record = await prisma.qrCode.findUnique({
-      where: { code },
-      select: {
-        id: true,
-        code: true,
-        payload: true,
-        type: true,
-        oneTime: true,
-        isValid: true,
-        createdAt: true,
-        validatedAt: true,
-        expiresAt: true,
-        createdBy: true, // Include to check generator
-        creator: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-      },
-    });
-
-    if (!record) {
-      return res.status(404).json({ qr: null, message: 'Invalid QR code' });
-    }
-
-    // Reject site/page QR codes
-    if (record.type === 'page') {
-      return res.status(400).json({
-        qr: null,
-        message: 'Page QR codes cannot be validated in-app. Scan with a mobile device to view the page.',
-      });
-    }
-
-    // Handle generic QR codes (generator only)
-    if (record.createdBy !== req.userId) {
-      return res.status(403).json({ qr: null, message: 'Only the generator can validate this QR code' });
-    }
-
-    if (!record.isValid) {
-      return res.status(400).json({ qr: null, message: 'QR code is invalid or already used' });
-    }
-    if (record.expiresAt && record.expiresAt < new Date()) {
-      return res.status(400).json({ qr: null, message: 'QR code expired' });
-    }
-
-    // Record the scan
-    await prisma.qrScan.create({
-      data: {
-        qrCodeId: record.id,
-        userId: req.userId,
-        scannedAt: new Date(),
-      },
-    });
-
-    // Invalidate one-time generic QR codes
-    let updated = record;
-    if (record.oneTime) {
-      updated = await prisma.qrCode.update({
-        where: { code },
-        data: { isValid: false, validatedAt: new Date() },
-        select: {
-          id: true,
-          code: true,
-          payload: true,
-          type: true,
-          oneTime: true,
-          isValid: true,
-          createdAt: true,
-          validatedAt: true,
-          expiresAt: true,
-          creator: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+  async validate(req, res) {
+    try {
+      const { code } = req.body;
+      if (!code || typeof code !== "string") {
+        return res
+          .status(400)
+          .json({ qr: null, message: "code (string) is required" });
+      }
+  
+      const now = new Date();
+  
+      const result = await prisma.$transaction(async (tx) => {
+        // Find the QR record
+        const record = await tx.qrCode.findUnique({
+          where: { code },
+          select: {
+            id: true,
+            code: true,
+            payload: true,
+            type: true,
+            oneTime: true,
+            isValid: true,
+            createdAt: true,
+            validatedAt: true,
+            expiresAt: true,
+            createdBy: true,
+            creator: {
+              select: { id: true, firstName: true, lastName: true, email: true },
+            },
           },
-        },
+        });
+  
+        if (!record) {
+          throw { status: 404, message: "Invalid QR code" };
+        }
+  
+        // Reject site/page QR codes
+        if (record.type === "page") {
+          throw {
+            status: 400,
+            message:
+              "Page QR codes cannot be validated in-app. Scan with a mobile device to view the page.",
+          };
+        }
+  
+        // Validate ownership
+        if (record.createdBy !== req.userId) {
+          throw {
+            status: 403,
+            message: "Only the generator can validate this QR code",
+          };
+        }
+  
+        // Check validity and expiration
+        if (!record.isValid) {
+          throw {
+            status: 400,
+            message: "QR code is invalid or already used",
+          };
+        }
+        if (record.expiresAt && record.expiresAt < now) {
+          throw { status: 400, message: "QR code expired" };
+        }
+  
+        // Record the scan
+        await tx.qrScan.create({
+          data: {
+            qrCodeId: record.id,
+            userId: req.userId,
+            scannedAt: now,
+          },
+        });
+  
+        let updated = record;
+  
+        // Invalidate if one-time
+        if (record.oneTime) {
+          updated = await tx.qrCode.update({
+            where: { code },
+            data: { isValid: false, validatedAt: now },
+            select: {
+              id: true,
+              code: true,
+              payload: true,
+              type: true,
+              oneTime: true,
+              isValid: true,
+              createdAt: true,
+              validatedAt: true,
+              expiresAt: true,
+              creator: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                },
+              },
+            },
+          });
+        }
+  
+        return updated;
       });
+  
+      // Format human-readable response
+      const humanReadable = {
+        id: result.id,
+        code: result.code,
+        payload:
+          typeof result.payload === "string"
+            ? result.payload
+            : result.payload?.content || "N/A",
+        type: result.type,
+        oneTime: result.oneTime,
+        isValid: result.isValid,
+        createdAt: result.createdAt.toISOString(),
+        validatedAt: result.validatedAt
+          ? result.validatedAt.toISOString()
+          : null,
+        expiresAt: result.expiresAt ? result.expiresAt.toISOString() : null,
+        creator: result.creator
+          ? `${result.creator.firstName ?? ""} ${result.creator.lastName ?? ""}`.trim()
+          : "Unknown",
+      };
+  
+      const qr = {
+        ...result,
+        createdAt: result.createdAt?.toISOString?.() || null,
+        validatedAt: result.validatedAt
+          ? result.validatedAt.toISOString()
+          : null,
+        expiresAt: result.expiresAt ? result.expiresAt.toISOString() : null,
+      };
+  
+      return res.status(200).json({
+        qr,
+        message: "QR code validated successfully",
+        humanReadable,
+      });
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ qr: null, message: err.message });
+      }
+      console.error("qr validate error:", err);
+      return res.status(500).json({ qr: null, message: "Server error" });
     }
-
-    // Format human-readable response
-    const humanReadable = {
-      id: updated.id,
-      code: updated.code,
-      payload: typeof updated.payload === 'string' ? updated.payload : updated.payload?.content || 'N/A',
-      type: updated.type,
-      oneTime: updated.oneTime,
-      isValid: updated.isValid,
-      createdAt: updated.createdAt.toISOString(),
-      validatedAt: updated.validatedAt ? updated.validatedAt.toISOString() : null,
-      expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
-      creator: updated.creator ? `${updated.creator.firstName} ${updated.creator.lastName}`.trim() : 'Unknown',
-    };
-
-    const qr = {
-      ...updated,
-      createdAt: updated.createdAt?.toISOString?.() || null,
-      validatedAt: updated.validatedAt ? updated.validatedAt.toISOString() : null,
-      expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
-    };
-    return res.status(200).json({
-      qr,
-      message: 'QR code validated successfully',
-      humanReadable,
-    });
-  } catch (err) {
-    console.error('qr validate error:', err);
-    return res.status(500).json({ qr: null, message: 'Server error' });
-  }
-},
+  },
 
   /**
  * POST /qr/scan-image (GENERATOR only)

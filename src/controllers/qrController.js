@@ -299,6 +299,7 @@ async renderPage(req, res) {
   async validate(req, res) {
     try {
       const { code } = req.body;
+      console.log(`[QR Validate] Validating code: ${code} for user: ${req.userId}`);
       if (!code || typeof code !== "string") {
         return res
           .status(400)
@@ -327,6 +328,7 @@ async renderPage(req, res) {
             },
           },
         });
+        console.log('[QR Validate] Found record:', JSON.stringify(record, null, 2));
   
         if (!record) {
           throw { status: 404, message: "Invalid QR code" };
@@ -431,6 +433,7 @@ async renderPage(req, res) {
         expiresAt: result.expiresAt ? result.expiresAt.toISOString() : null,
       };
   
+      console.log(`[QR Validate] Validation successful for code: ${result.code}`);
       return res.status(200).json({
         qr,
         message: "QR code validated successfully",

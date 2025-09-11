@@ -5,7 +5,8 @@ async function main() {
     data: [
       { name: 'GENERATOR' },
       { name: 'RECEIVER' },
-      { name: 'ADMIN' }
+      { name: 'ADMIN' },
+      { name: 'SCANNER' }
     ],
     skipDuplicates: true
   });

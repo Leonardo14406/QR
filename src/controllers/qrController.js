@@ -343,8 +343,9 @@ async renderPage(req, res) {
           };
         }
   
-        // Validate ownership
-        if (record.createdBy !== req.userId) {
+        // Validate ownership unless user has SCANNER or ADMIN role
+        const canBypassOwnership = Array.isArray(req.roles) && (req.roles.includes("SCANNER") || req.roles.includes("ADMIN"));
+        if (!canBypassOwnership && record.createdBy !== req.userId) {
           throw {
             status: 403,
             message: "Only the generator can validate this QR code",
@@ -551,7 +552,8 @@ async scanImage(req, res) {
     }
 
     // Handle generic QR codes (generator only)
-    if (record.createdBy !== req.userId) {
+    const canBypassOwnership = Array.isArray(req.roles) && (req.roles.includes('SCANNER') || req.roles.includes('ADMIN'));
+    if (!canBypassOwnership && record.createdBy !== req.userId) {
       console.error('[qr/scan-image] Non-generator attempted validation:', { code, userId: req.userId });
       return res.status(403).json({ qr: null, message: 'Only the generator can validate this QR code' });
     }

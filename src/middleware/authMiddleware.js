@@ -61,3 +61,36 @@ export function requireRole(role) {
     }
   };
 }
+
+/**
+ * Authorizes by checking if the user has ANY of the provided roles.
+ */
+export function requireAnyRole(roles) {
+  return async (req, res, next) => {
+    try {
+      if (!req.userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId },
+        include: { roles: { include: { role: true } } }
+      });
+
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const dbRoles = user.roles.map((r) => r.role.name);
+      const allowed = roles.some((r) => dbRoles.includes(r));
+      if (!allowed) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      req.roles = dbRoles;
+      return next();
+    } catch (e) {
+      return res.status(500).json({ message: "Server error" });
+    }
+  };
+}

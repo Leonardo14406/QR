@@ -1,6 +1,6 @@
 import express from "express";
 import qrController from "../controllers/qrController.js";
-import { authenticateJWT, requireRole } from "../middleware/authMiddleware.js";
+import { authenticateJWT, requireRole, requireAnyRole } from "../middleware/authMiddleware.js";
 import { enforceDailyGenericQrLimit } from "../middleware/qrRateLimit.js";
 import multer from "multer";
 
@@ -15,8 +15,8 @@ router.post(
   qrController.generate
 );
 router.post("/generate-page", authenticateJWT, requireRole("GENERATOR"), qrController.generatePage);
-router.post("/validate", authenticateJWT, requireRole("GENERATOR"), qrController.validate);
-router.post("/scan-image", authenticateJWT, requireRole("GENERATOR"), upload.single("image"), qrController.scanImage);
+router.post("/validate", authenticateJWT, requireAnyRole(["GENERATOR", "SCANNER", "ADMIN"]), qrController.validate);
+router.post("/scan-image", authenticateJWT, requireAnyRole(["GENERATOR", "SCANNER", "ADMIN"]), upload.single("image"), qrController.scanImage);
 
 router.get("/history", authenticateJWT, requireRole("GENERATOR"), qrController.history);
 router.get("/history/:id", authenticateJWT, requireRole("GENERATOR"), qrController.getQrDetailsById);

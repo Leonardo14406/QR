@@ -11,7 +11,7 @@ export async function enforceDailyGenericQrLimit(req, res, next) {
 
     // Try to read per-user settings if present
     const settings = await prisma.userSettings.findUnique({ where: { userId } });
-    const fallback = parseInt(process.env.DAILY_GENERIC_QR_LIMIT || "50", 10);
+    const fallback = parseInt(process.env.DAILY_GENERIC_QR_LIMIT || "500", 10);
     const defaultLimit = Number.isFinite(fallback) ? fallback : 50;
     const userLimit = settings?.dailyGenericQrLimit ?? defaultLimit;
 

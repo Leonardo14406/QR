@@ -129,8 +129,10 @@ model qrScan {
   qrCodeId  String
   scannedAt DateTime @default(now())
   qrCode    qrCode   @relation(fields: [qrCodeId], references: [id])
-}
 
+  @@index([qrCodeId])
+  @@index([userId])
+}
 
 // NEW: Per-user settings
 model userSettings {
@@ -143,9 +145,3 @@ model userSettings {
 
   @@index([userId])
 }
-
-
-
-
-
-

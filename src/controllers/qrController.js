@@ -2,7 +2,11 @@
 import crypto from "crypto";
 import prisma from "../../config/db.js";
 import jsQR from "jsqr";
-import sharp from "sharp";    
+import sharp from "sharp";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const Jimp = require("jimp");
+const QrCode = require("qrcode-reader");
 /**
  * Create a cryptographically-strong opaque code.
  * (Opaque token rather than embedding payload in the code itself.)
@@ -363,22 +367,33 @@ async renderPage(req, res) {
           throw { status: 400, message: "QR code expired" };
         }
   
-        // Record the scan
-        await tx.qrScan.create({
-          data: {
-            qrCodeId: record.id,
-            userId: req.userId,
-            scannedAt: now,
-          },
-        });
-  
         let updated = record;
   
         // Invalidate if one-time
         if (record.oneTime) {
-          updated = await tx.qrCode.update({
-            where: { code },
+          // Atomically invalidate only if still valid to prevent race conditions
+          const invalidate = await tx.qrCode.updateMany({
+            where: { id: record.id, isValid: true },
             data: { isValid: false, validatedAt: now },
+          });
+
+          if (invalidate.count !== 1) {
+            // Another concurrent validator already invalidated it
+            throw { status: 400, message: "QR code is invalid or already used" };
+          }
+
+          // Record the scan after successful invalidation
+          await tx.qrScan.create({
+            data: {
+              qrCodeId: record.id,
+              userId: req.userId,
+              scannedAt: now,
+            },
+          });
+
+          // Re-read the latest state for response
+          updated = await tx.qrCode.findUnique({
+            where: { id: record.id },
             select: {
               id: true,
               code: true,
@@ -397,6 +412,15 @@ async renderPage(req, res) {
                   email: true,
                 },
               },
+            },
+          });
+        } else {
+          // Non one-time: just record the scan
+          await tx.qrScan.create({
+            data: {
+              qrCodeId: record.id,
+              userId: req.userId,
+              scannedAt: now,
             },
           });
         }

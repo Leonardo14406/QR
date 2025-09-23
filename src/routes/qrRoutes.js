@@ -23,4 +23,7 @@ router.get("/history/:id", authenticateJWT, requireRole("GENERATOR"), qrControll
 router.delete("/history/:id", authenticateJWT, requireRole("GENERATOR"), qrController.deleteHistory);
 router.get("/page/:id", qrController.renderPage);
 
+// Real-time helpers
+router.get("/active", authenticateJWT, requireRole("GENERATOR"), qrController.active);
+
 export default router;

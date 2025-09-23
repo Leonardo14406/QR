@@ -7,6 +7,7 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const Jimp = require("jimp");
 const QrCode = require("qrcode-reader");
+
 /**
  * Create a cryptographically-strong opaque code.
  * (Opaque token rather than embedding payload in the code itself.)
@@ -57,6 +58,27 @@ async function createUniqueCode() {
     if (!existing) return code;
   }
   throw new Error("Failed to generate a unique qr code");
+}
+
+// Attempt to extract our opaque QR token from arbitrary strings/URLs
+function extractCodeFromString(input) {
+  if (!input || typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  // 1) Direct hex token (our generateOpaqueCode uses 24 bytes hex => 48 chars)
+  const hexMatch = trimmed.match(/\b[0-9a-fA-F]{48,64}\b/);
+  if (hexMatch) return hexMatch[0];
+  // 2) Try URL parsing with common patterns
+  try {
+    const url = new URL(trimmed);
+    // a) query param ?code=...
+    const qp = url.searchParams.get('code');
+    if (qp && /[0-9a-fA-F]{40,64}/.test(qp)) return qp;
+    // b) last path segment
+    const segs = url.pathname.split('/').filter(Boolean);
+    const last = segs[segs.length - 1];
+    if (last && /[0-9a-fA-F]{40,64}/.test(last)) return last;
+  } catch {}
+  return trimmed; // fallback to original
 }
 
 const qrController = {
@@ -116,6 +138,28 @@ const qrController = {
           createdAt: record.createdAt?.toISOString?.() || null,
           expiresAt: record.expiresAt?.toISOString?.() || null,
         };
+
+        // Emit real-time event to the creator's room
+        const io = req.app.get('io');
+        if (io) {
+          io.to(`user:${req.userId}`).emit('qr:new', {
+            qr,
+            humanReadable: {
+              id: qr.id,
+              code: qr.code,
+              payload: typeof qr.payload === 'string' ? qr.payload : qr.payload?.content || 'N/A',
+              type: qr.type,
+              oneTime: qr.oneTime,
+              isValid: qr.isValid,
+              createdAt: qr.createdAt,
+              validatedAt: null,
+              expiresAt: qr.expiresAt,
+              creator: qr.creator ? `${qr.creator.firstName ?? ''} ${qr.creator.lastName ?? ''}`.trim() : 'Unknown',
+            },
+            message: 'QR code created',
+          });
+        }
+
         return res.status(201).json({ qr });
       } catch (responseErr) {
         console.error("qr generate response error:", responseErr);
@@ -302,7 +346,8 @@ async renderPage(req, res) {
  */
   async validate(req, res) {
     try {
-      const { code } = req.body;
+      const { code: raw } = req.body;
+      const code = extractCodeFromString(raw);
       console.log(`[QR Validate] Validating code: ${code} for user: ${req.userId}`);
       if (!code || typeof code !== "string") {
         return res
@@ -457,6 +502,23 @@ async renderPage(req, res) {
           : null,
         expiresAt: result.expiresAt ? result.expiresAt.toISOString() : null,
       };
+
+      // Emit real-time events to: creator of the code and the validating user (if different)
+      const io = req.app.get('io');
+      if (io) {
+        // Notify creator (room: user:<createdBy>)
+        io.to(`user:${result.creator?.id || result.createdBy || ''}`).emit('qr:validated', {
+          qr,
+          humanReadable,
+          message: 'QR code validated',
+        });
+        // Notify current user
+        io.to(`user:${req.userId}`).emit('qr:validated', {
+          qr,
+          humanReadable,
+          message: 'QR code validated',
+        });
+      }
   
       console.log(`[QR Validate] Validation successful for code: ${result.code}`);
       return res.status(200).json({
@@ -538,7 +600,7 @@ async scanImage(req, res) {
       qrCode = { data: code };
     }
 
-    const code = qrCode.data;
+    const code = extractCodeFromString(qrCode.data);
     console.log('[qr/scan-image] Detected QR code:', code);
 
     // Find QR code in database
@@ -644,6 +706,15 @@ async scanImage(req, res) {
       validatedAt: updated.validatedAt ? updated.validatedAt.toISOString() : null,
       expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
     };
+
+    // Emit real-time event
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${req.userId}`).emit('qr:validated', { qr, humanReadable, message: 'QR from image validated' });
+      // Notify the creator, too
+      // Note: record.createdBy isn't selected in updated; we used 'record' earlier
+      io.to(`user:${record.createdBy}`).emit('qr:validated', { qr, humanReadable, message: 'QR from image validated' });
+    }
     return res.status(200).json({
       qr,
       message: 'QR code scanned successfully',
@@ -842,6 +913,52 @@ async deleteHistory(req, res) {
     return res.status(404).json({ message: 'History entry not found' });
   } catch (err) {
     console.error('qr deleteHistory error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+},
+
+/**
+ * GET /qr/active (GENERATOR only)
+ * Returns active (valid, non-expired) generic QR codes created by the user.
+ */
+async active(req, res) {
+  try {
+    const now = new Date();
+    const items = await prisma.qrCode.findMany({
+      where: {
+        createdBy: req.userId,
+        type: 'generic',
+        isValid: true,
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        code: true,
+        payload: true,
+        type: true,
+        oneTime: true,
+        isValid: true,
+        createdAt: true,
+        validatedAt: true,
+        expiresAt: true,
+      },
+    });
+
+    const mapped = items.map(i => ({
+      ...i,
+      createdAt: i.createdAt?.toISOString?.() || null,
+      validatedAt: i.validatedAt ? i.validatedAt.toISOString() : null,
+      expiresAt: i.expiresAt ? i.expiresAt.toISOString() : null,
+      payload: typeof i.payload === 'string' ? i.payload : i.payload?.content || 'N/A',
+    }));
+
+    return res.json({ items: mapped });
+  } catch (err) {
+    console.error('qr active error:', err);
     return res.status(500).json({ message: 'Server error' });
   }
 },

@@ -9,6 +9,9 @@ import { errorHandler } from "./middleware/errorHandler.js";
 //import { apiLimiter } from "./middleware/rateLimiter.js";
 import qrRoutes from "./routes/qrRoutes.js";
 import settingsRoutes from "./routes/settingsRoutes.js";
+import http from "http";
+import jwt from "jsonwebtoken";
+import { Server as SocketIOServer } from "socket.io";
 
 dotenv.config();
 
@@ -43,8 +46,44 @@ app.use("/qr", qrRoutes);
 // Errors
 app.use(errorHandler);
 
+// --- Real-time (Socket.IO) setup ---
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: process.env.CLIENT_ORIGIN || "*",
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+// Make io available to route handlers/controllers via req.app.get('io')
+app.set("io", io);
+
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    if (!token) return next(); // Allow anonymous (will just not join a user room)
+    const payload = jwt.verify(String(token), process.env.JWT_SECRET);
+    socket.data.userId = payload?.sub || payload?.id || payload?.userId;
+    return next();
+  } catch (err) {
+    // Invalid token: continue without a user context
+    return next();
+  }
+});
+
+io.on("connection", (socket) => {
+  const userId = socket.data.userId;
+  if (userId) {
+    socket.join(`user:${userId}`);
+  }
+  socket.on("disconnect", () => {
+    // no-op; room cleanup is automatic
+  });
+});
+
 const PORT = process.env.PORT || 5555;
-const server = app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on PORT: ${PORT}`);
 });
 

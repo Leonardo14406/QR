@@ -37,7 +37,8 @@
     "qrcode": "^1.5.4",
     "qrcode-reader": "^1.0.4",
     "sharp": "^0.34.3",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "socket.io": "^4.7.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.10",
